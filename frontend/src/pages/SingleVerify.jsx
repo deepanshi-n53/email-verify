@@ -100,6 +100,9 @@ export default function SingleVerify() {
           SMTP handshake · catch-all detection · disposable filtering · confidence scoring.
           Zero false positives.
         </p>
+        <p style={{ color: '#6888a8', fontSize: 13, marginTop: 8 }}>
+          100% free · No account required · No limits on single checks
+        </p>
       </div>
 
       {/* Input card */}

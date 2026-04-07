@@ -2,9 +2,16 @@ import React from 'react';
 import StatusBadge from './StatusBadge.jsx';
 import CheckGrid   from './CheckGrid.jsx';
 
+const VERIFICATION_METHOD_LABELS = {
+  trusted_provider: '✓ Verified via trusted provider MX',
+  heuristic:        '⚡ MX verified + smart heuristic',
+  smtp_probe:       '✓ Full SMTP probe completed',
+  dns_only:         'ℹ DNS-only check',
+};
+
 export default function ResultCard({ result }) {
   if (!result) return null;
-  const { email, status, confidence, reason, mx_records, checks, response_time_ms } = result;
+  const { email, status, confidence, reason, mx_records, checks, response_time_ms, verification_method } = result;
 
   const scoreColor = confidence >= 80 ? '#22c55e' : confidence >= 50 ? '#f59e0b' : '#ef4444';
 
@@ -53,9 +60,16 @@ export default function ResultCard({ result }) {
           color: '#8b84ff',
         }}>{reason}</span>
 
-        <span style={{ fontSize: 11, color: '#8888a8', fontFamily: "'DM Mono', monospace" }}>
-          {mx_records?.[0] && `MX: ${mx_records[0]} · `}{response_time_ms}ms
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+          {verification_method && (
+            <span style={{ fontSize: 11, color: '#6c8aaa', fontFamily: "'DM Mono', monospace" }}>
+              {VERIFICATION_METHOD_LABELS[verification_method] || verification_method}
+            </span>
+          )}
+          <span style={{ fontSize: 11, color: '#8888a8', fontFamily: "'DM Mono', monospace" }}>
+            {mx_records?.[0] && `MX: ${mx_records[0]} · `}{response_time_ms}ms
+          </span>
+        </div>
       </div>
     </div>
   );

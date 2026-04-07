@@ -57,7 +57,7 @@ export default function BulkVerify() {
     try {
       const emails = await parseUploadedFile(file);
       if (emails.length === 0) { setError('No valid email addresses found in file.'); return; }
-      if (emails.length > 500) { setError(`File contains ${emails.length} emails. Free tier limit: 500. Upgrade for more.`); return; }
+      if (emails.length > 500) { setError(`File contains ${emails.length} emails. Max 500 emails per batch.`); return; }
       await runBulk(emails);
     } catch (err) {
       setError(err.message);

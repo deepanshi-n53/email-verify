@@ -58,7 +58,7 @@ export default function ApiDocs() {
       <div style={{ textAlign: 'center', marginBottom: 32 }}>
         <h2 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.5px', marginBottom: 8 }}>API Documentation</h2>
         <p style={{ color: '#8888a8', fontSize: 14 }}>
-          RESTful JSON API · free tier no key required · 100 req/day per IP
+          RESTful JSON API · Free, no account required · All features included
         </p>
         <div style={{
           fontFamily: "'DM Mono', monospace", fontSize: 13,
@@ -94,11 +94,13 @@ export default function ApiDocs() {
     "disposable": false,      // Not a disposable provider
     "roleBased":  false,      // Not a role address
     "gibberish":  false,      // Normal local part
-    "trusted":    false       // Known provider shortcut
+    "trusted":    false,      // Known provider shortcut
+    "spf":        true        // SPF record present
   },
   "reason": "Trusted provider — MX verified, SMTP connection confirmed",
   "mx_records": ["aspmx.l.google.com"],
-  "response_time_ms": 1240
+  "response_time_ms": 1240,
+  "verification_method": "trusted_provider"
 }`}</CodeBlock>
       </Card>
 
@@ -111,7 +113,6 @@ export default function ApiDocs() {
         <CodeBlock>{`// Request
 POST /api/bulk-verify
 Content-Type: application/json
-X-API-Key: mp_free_your_key_here     // optional, raises limits
 
 {
   "emails": ["a@gmail.com", "b@yahoo.com", "c@mailinator.com"],
@@ -182,11 +183,10 @@ X-API-Key: mp_free_your_key_here     // optional, raises limits
         <CodeBlock>{`// 429 Rate limit response
 {
   "error": "rate_limit_exceeded",
-  "message": "Rate limit exceeded. Free tier: 100 verifications/day.",
+  "message": "Rate limit exceeded. 100 verifications/day per IP.",
   "limit": 100,
   "remaining": 0,
-  "reset_in_seconds": 43200,
-  "upgrade_url": "https://mailprobe.io/pricing"
+  "reset_in_seconds": 43200
 }`}</CodeBlock>
       </Card>
 
@@ -207,8 +207,7 @@ if (data.status === 'valid' && data.confidence >= 75) {
 
 r = requests.get(
     'https://your-project.vercel.app/api/verify',
-    params={'email': 'user@example.com'},
-    headers={'X-API-Key': 'mp_free_your_key'}
+    params={'email': 'user@example.com'}
 )
 data = r.json()
 print(data['status'], data['confidence'])`}</CodeBlock>
@@ -223,17 +222,17 @@ curl -X POST "https://your-project.vercel.app/api/bulk-verify" \\
 
       {/* Rate limits */}
       <Card>
-        <SectionTitle>Rate limits</SectionTitle>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+        <SectionTitle>Rate Limits (Free)</SectionTitle>
+        <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
           {[
-            { plan: 'Free (no key)', limit: '100/day', bulk: '50/request', color: '#06b6d4' },
-            { plan: 'Free key (mp_free_)',  limit: '100/day',  bulk: '50/request',  color: '#8b84ff' },
-            { plan: 'Pro key (mp_live_)',   limit: '10k/day', bulk: '500/request', color: '#22c55e' },
-          ].map(p => (
-            <div key={p.plan} style={{ background: '#12121a', borderRadius: 10, padding: 14, border: '1px solid #2a2a3e' }}>
-              <div style={{ fontSize: 11, color: '#8888a8', marginBottom: 6 }}>{p.plan}</div>
-              <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: p.color }}>{p.limit}</div>
-              <div style={{ fontSize: 11, color: '#8888a8', marginTop: 4 }}>Bulk: {p.bulk}</div>
+            ['Single verify', '100 requests / day per IP'],
+            ['Bulk verify', '12 jobs / hour per IP, up to 500 emails per job'],
+            ['API key required', 'No — all features are free'],
+            ['Paid tier', 'None — everything is free'],
+          ].map(([label, value]) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#12121a', borderRadius: 8, border: '1px solid #2a2a3e' }}>
+              <span style={{ color: '#8888a8' }}>{label}</span>
+              <span style={{ color: '#e8e8f0', fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{value}</span>
             </div>
           ))}
         </div>

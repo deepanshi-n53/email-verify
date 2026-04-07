@@ -52,15 +52,9 @@ export default function Nav({ activeTab, onTabChange }) {
         ))}
       </div>
 
-      <button
-        style={{
-          background: '#6c63ff', color: '#fff', border: 'none',
-          padding: '8px 18px', borderRadius: 8, fontSize: 13,
-          fontFamily: "'Sora', sans-serif", fontWeight: 500, cursor: 'pointer',
-        }}
-      >
-        Free Signup
-      </button>
+      <div style={{ fontSize: 12, color: '#8888a8', fontFamily: "'DM Mono', monospace" }}>
+        Free · No account required
+      </div>
     </nav>
   );
 }
