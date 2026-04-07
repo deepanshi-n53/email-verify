@@ -1,0 +1,13 @@
+{
+  "name": "mailprobe",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev":     "vercel dev",
+    "setup":   "cd frontend && npm install",
+    "build":   "cd frontend && npm run build"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
