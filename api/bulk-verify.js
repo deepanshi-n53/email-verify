@@ -4,20 +4,18 @@
  *
  * Body: { "emails": ["a@b.com", "c@d.com", ...], "options": { "filter": "all" } }
  *
- * Vercel function max duration: 30s (Pro plan gives 60s).
+ * Vercel function max duration: 30s.
  * For 10k+ emails: use the job queue pattern — POST creates a job,
- * GET /api/jobs/:id polls status. This endpoint handles up to 200 synchronously.
+ * GET /api/jobs/:id polls status. This endpoint handles up to 500 synchronously.
  *
- * Free tier: 100 emails/day
- * Pro tier:  unlimited (with SMTP worker)
+ * All features are free — no paid tier.
  */
 
 const { verifyEmail } = require('./_lib/verifier');
 const { withCors } = require('./_lib/cors');
 const { createRateLimitMiddleware, getClientIp } = require('./_lib/rateLimit');
 
-const FREE_BULK_LIMIT = parseInt(process.env.FREE_BULK_LIMIT || '50');
-const PRO_BULK_LIMIT  = parseInt(process.env.PRO_BULK_LIMIT  || '500');
+const FREE_BULK_LIMIT = parseInt(process.env.FREE_BULK_LIMIT || '500');
 const CONCURRENCY     = parseInt(process.env.BULK_CONCURRENCY || '10');
 
 // Rate limit: 1 bulk job per 5 minutes per IP (free tier)
@@ -64,18 +62,12 @@ async function handler(req, res) {
     });
   }
 
-  // Check API key for limit
-  const apiKey = req.headers['x-api-key'];
-  const isPro  = apiKey?.startsWith('mp_live_');
-  const limit  = isPro ? PRO_BULK_LIMIT : FREE_BULK_LIMIT;
-
-  if (emails.length > limit) {
+  if (emails.length > FREE_BULK_LIMIT) {
     return res.status(400).json({
       error: 'too_many_emails',
-      message: `Free tier: max ${FREE_BULK_LIMIT} emails per request. Pro: ${PRO_BULK_LIMIT}. You sent ${emails.length}.`,
-      limit,
+      message: `Max ${FREE_BULK_LIMIT} emails per request. You sent ${emails.length}.`,
+      limit: FREE_BULK_LIMIT,
       sent: emails.length,
-      upgrade_url: 'https://mailprobe.io/pricing',
     });
   }
 

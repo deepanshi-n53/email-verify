@@ -66,8 +66,6 @@ function validateApiKey(req) {
   const key = req.headers['x-api-key'] || req.query?.apikey;
   if (!key) return { valid: false, tier: 'anonymous' };
 
-  // Demo: accept any key starting with 'mp_' as pro tier
-  if (key.startsWith('mp_live_')) return { valid: true, tier: 'pro', key };
   if (key.startsWith('mp_free_')) return { valid: true, tier: 'free', key };
 
   // In production, check against DB:
@@ -82,7 +80,7 @@ function createRateLimitMiddleware(options = {}) {
   const {
     limit = parseInt(process.env.RATE_LIMIT_FREE || '100'),
     windowMs = 86400000,
-    message = 'Rate limit exceeded. Free tier: 100 verifications/day. Upgrade at mailprobe.io',
+    message = 'Rate limit exceeded. 100 verifications/day per IP.',
   } = options;
 
   return function withRateLimit(req, res, handler) {
@@ -94,11 +92,9 @@ function createRateLimitMiddleware(options = {}) {
     const ip = getClientIp(req);
     const apiKey = req.headers['x-api-key'] || req.query?.apikey;
 
-    // Pro API keys get higher limits
     const identifier = apiKey ? `key:${apiKey}` : `ip:${ip}`;
-    const effectiveLimit = apiKey ? 10000 : limit;
 
-    const rl = rateLimit(identifier, effectiveLimit, windowMs);
+    const rl = rateLimit(identifier, limit, windowMs);
 
     // Set rate limit headers
     res.setHeader('X-RateLimit-Limit', rl.limit);
@@ -112,7 +108,6 @@ function createRateLimitMiddleware(options = {}) {
         limit: rl.limit,
         remaining: 0,
         reset_in_seconds: rl.reset,
-        upgrade_url: 'https://mailprobe.io/pricing',
       });
       return;
     }
