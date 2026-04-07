@@ -78,29 +78,32 @@ export default function ApiDocs() {
         <p style={{ color: '#8888a8', fontSize: 13, marginBottom: 12 }}>
           Also accepts POST with JSON body <code style={{ background: '#12121a', padding: '1px 6px', borderRadius: 4, fontSize: 12 }}>{`{"email":"..."}`}</code>
         </p>
-        <CodeBlock>{`// GET /api/verify?email=john@acme.com
+        <CodeBlock>{`// GET /api/verify?email=user@example.com
 // Response 200 OK
 
 {
-  "email": "john@acme.com",
-  "status": "valid",          // valid | invalid | risky | unknown
-  "confidence": 89,           // 0–100
+  "email": "user@example.com",
+  "status": "valid",              // valid | invalid | catch-all | unknown
+  "confidence": 85,               // 0–100
+  "syntax_valid": "valid",        // Skrapp-compatible: valid | invalid
+  "mailbox_status": "valid",      // Skrapp-compatible: valid | invalid | unknown
+  "mailbox_type": "professional", // professional | personal | disposable | role
+  "email_exchange": "aspmx.l.google.com",
+  "verification_method": "smtp_probe", // trusted_provider | smtp_probe | heuristic
+  "reason": "Email is valid and successfully reachable.",
   "checks": {
-    "syntax":     true,       // RFC 5321/5322 compliant
-    "mx":         true,       // MX records found
-    "smtp":       true,       // SMTP server reachable
-    "mailbox":    true,       // Mailbox accepted RCPT
-    "catchAll":   false,      // Not a catch-all domain
-    "disposable": false,      // Not a disposable provider
-    "roleBased":  false,      // Not a role address
-    "gibberish":  false,      // Normal local part
-    "trusted":    false,      // Known provider shortcut
-    "spf":        true        // SPF record present
+    "dns_syntax":    true,   // RFC 5321/5322 compliant
+    "mail_server":   true,   // MX records found
+    "smtp_verified": true,   // SMTP server accepted probe
+    "catch_all":     false,  // Not a catch-all domain
+    "temp_email":    false,  // Not a disposable provider
+    "greylisted":    false,  // No temporary rejection
+    "spam_trap":     false,  // No spam trap pattern
+    "role_based":    false,  // Not a role address
+    "spf":           true    // SPF record present
   },
-  "reason": "Trusted provider — MX verified, SMTP connection confirmed",
   "mx_records": ["aspmx.l.google.com"],
-  "response_time_ms": 1240,
-  "verification_method": "trusted_provider"
+  "response_time_ms": 312
 }`}</CodeBlock>
       </Card>
 
@@ -222,12 +225,12 @@ curl -X POST "https://your-project.vercel.app/api/bulk-verify" \\
 
       {/* Rate limits */}
       <Card>
-        <SectionTitle>Rate Limits (Free)</SectionTitle>
+        <SectionTitle>Free Tier Limits</SectionTitle>
         <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
           {[
-            ['Single verify', '100 requests / day per IP'],
-            ['Bulk verify', '12 jobs / hour per IP, up to 500 emails per job'],
-            ['API key required', 'No — all features are free'],
+            ['Single verify', '100/day per IP (no account needed)'],
+            ['Bulk verify', '500 emails/job, 12 jobs/hour per IP'],
+            ['API key required', 'No — all features included'],
             ['Paid tier', 'None — everything is free'],
           ].map(([label, value]) => (
             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#12121a', borderRadius: 8, border: '1px solid #2a2a3e' }}>

@@ -1,67 +1,29 @@
 /**
- * mailprobe/api/_lib/verifier.js
- * Core 7-layer email verification engine (pure Node.js, no native deps).
- * Works inside Vercel serverless functions.
+ * api/_lib/verifier.js
  *
- * NOTE ON SMTP IN SERVERLESS:
- *   Vercel blocks outbound port 25. This engine does:
- *     1. DNS/MX verification   — real, via Node dns module
- *     2. Disposable detection  — static list (extend via KV / DB)
- *     3. Role / gibberish      — heuristic, instant
- *     4. SMTP heuristic        — trusted-provider shortcut + Railway hook
- *   For full SMTP RCPT probing, deploy the companion Railway worker
- *   (api/_lib/smtpWorker.md) and set SMTP_WORKER_URL in env.
+ * ACCURACY STRATEGY:
+ * Layer 1 — DNS Syntax & RFC Compliance:    Hard gate, instant
+ * Layer 2 — Mail Server Existence (MX):     Dual DNS resolver (Cloudflare + Google)
+ * Layer 3 — Temporary Email Detection:      500+ known disposable domains
+ * Layer 4 — Role-based Detection:           50+ role prefixes
+ * Layer 5 — Spam Trap Detection:            Pattern-based heuristic
+ * Layer 6 — SMTP Verification:             Real RCPT probe via Railway worker
+ * Layer 7 — Catch-all Detection:           Random UUID probe after real RCPT
+ * Layer 8 — Greylisting Handling:          Detects 4xx temporary rejections
+ * Layer 9 — Gibberish / Entropy:           Heuristic confidence penalty only
+ *
+ * When SMTP_WORKER_URL is not set:
+ *   - Trusted providers (Gmail, Outlook etc) → trusted shortcut
+ *   - Others → heuristic (MX present = connectable)
+ *   - catch-all and invalid detection are NOT possible without SMTP
+ *
+ * Precision > Recall: when uncertain → risky/unknown, NEVER false valid
  */
 
-/**
- * ACCURACY STRATEGY — How MailProbe minimizes false positives:
- *
- * Layer 1 — Syntax (RFC 5321/5322):
- *   Hard gate. Malformed emails are immediately invalid.
- *   No network calls wasted on garbage input.
- *
- * Layer 2 — MX Record (dual DNS: Cloudflare 1.1.1.1 + Google 8.8.8.8):
- *   Hard gate. If the domain has no MX records, it cannot receive mail.
- *   Dual resolver ensures we don't fail on a single DNS outage.
- *   SPF record check adds a small confidence bonus for properly configured domains.
- *
- * Layer 3 — Disposable detection (500+ known domains):
- *   Flags burner/temp emails. Marked as "risky" not "invalid" — because
- *   disposable emails technically work, they're just low-quality.
- *
- * Layer 4 — Role-based detection (50+ prefixes):
- *   admin@, support@, noreply@ etc. route to teams, not individuals.
- *   High spam-complaint and bounce risk. Marked "risky".
- *
- * Layer 5 — SMTP heuristic / trusted provider shortcut:
- *   Vercel blocks port 25, so real RCPT probing requires the optional
- *   Railway worker (SMTP_WORKER_URL). Without it:
- *   - Known major providers (Gmail, Outlook, iCloud etc.) → trusted shortcut
- *     (they block RCPT probing anyway, and have near-zero false MX records)
- *   - Unknown domains → heuristic (MX present = connectable assumed)
- *   With SMTP_WORKER_URL set → real TCP handshake + RCPT TO probe.
- *
- * Layer 6 — Catch-all detection (via SMTP worker only):
- *   Sends RCPT TO a random UUID@domain. If accepted, domain accepts everything.
- *   Without SMTP worker, catch-all is not detectable — honest unknown.
- *
- * Layer 7 — Gibberish/entropy scoring:
- *   Heuristic penalty for random-looking local parts. Never a hard block.
- *   Only reduces confidence score.
- *
- * Confidence score (0–100):
- *   Weighted sum of all layers. Thresholds:
- *   ≥75 → valid | 45–74 → risky | <45 → invalid
- *
- * Precision > Recall (by design):
- *   When uncertain, we mark "risky" or "unknown" — NEVER false "valid".
- *   It is better to flag a real address as risky than to approve a fake one.
- */
-
+const dnsNative = require('dns');
 const dnsPromises = require('dns').promises;
-const { Resolver } = require('dns');
 
-// ─── DISPOSABLE DOMAINS ───────────────────────────────────────────────────
+// ─── DISPOSABLE DOMAINS (500+) ─────────────────────────────────────────────
 const DISPOSABLE = new Set([
   'mailinator.com','guerrillamail.com','tempmail.com','throwaway.email',
   'sharklasers.com','trashmail.com','yopmail.com','maildrop.cc',
@@ -69,76 +31,92 @@ const DISPOSABLE = new Set([
   'gettempmail.com','10minutemail.com','tempinbox.com','throwam.com',
   'spamherelots.com','tempr.email','discard.email','mailtemp.org',
   'jetable.fr','trash-mail.com','spamfree24.org','spamgourmet.org',
-  'cool.fr.nf','courriel.fr.nf','junk1.me','get2mail.fr','trashdevil.com',
-  'mt2015.com','mt2016.com','mt2017.com','despam.it','tempemail.co',
-  'spam4.me','mytrashmail.com','nobulk.com','bumpymail.com','chacuo.net',
+  'grr.la','guerrillamailblock.com','yopmail.fr','nospam.ze.tc',
+  'nomail.xl.cx','mega.zik.dj','speed.1s.fr','moncourrier.fr.nf',
+  'mailnesia.com','spambox.us','trashmail.at','trashmail.io','trashmail.me',
+  'trashmail.net','trashmail.org','tempmail.ninja','tempmail.plus',
+  'temp-mail.org','temp-mail.io','temp-mail.ru','dropmail.me',
+  'emailondeck.com','spamgourmet.net','mailexpire.com','filzmail.com',
+  'tmail.com','mailzilla.com','spamspot.com','spam.la','antispam.de',
+  'spamfree.eu','mailcatch.com','incognitomail.com','safetymail.info',
+  'spamtrail.com','bob.email','inoutmail.com','objectmail.com',
+  'proxymail.eu','rcpt.at','rklips.com','rmqkr.net','snakemail.com',
+  'sneakemail.com','sofimail.com','sogetthis.com','spampoison.com',
+  'spamtrash.net','tafmail.com','tempalias.com','tempe-mail.com',
+  'tempemail.biz','tempemail.com','tempinbox.co.uk','tempmailer.com',
+  'tempomail.fr','temporaryemail.net','temporaryemail.us',
+  'temporaryinbox.com','thanksnospam.com','thisisnotmyrealemail.com',
+  'tilien.com','tittbit.in','tradermail.info','trash2009.com',
+  'trash2010.com','trashdevil.de','trashemail.de','trashimail.com',
+  'trashmailer.com','trashymail.com','trbvm.com','turual.com',
+  'twinmail.de','veryrealemail.com','wazabi.club','whyspam.me',
+  'willselfdestruct.com','wuzupmail.net','xagloo.com','xemaps.com',
+  'xents.com','xmaily.com','xoxy.net','xyzfree.net','yep.it',
+  'ypmail.webarnak.fr.eu.org','zehnminuten.de','zetmail.com',
+  'zoaxe.com','zoemail.net','zoemail.org','zomg.info','mt2015.com',
+  'mt2016.com','mt2017.com','despam.it','tempemail.co','spam4.me',
+  'mytrashmail.com','nobulk.com','bumpymail.com','chacuo.net',
   'put2.net','anonbox.net','anonymbox.com','antichef.com','antichef.net',
   'armyspy.com','cuvox.de','dayrep.com','einrot.com','fleckens.hu',
   'gustr.com','jourrapide.com','rhyta.com','superrito.com','teleworm.us',
-  'grr.la','guerrillamailblock.com','yopmail.fr','jetable.fr.nf',
-  'nospam.ze.tc','nomail.xl.cx','mega.zik.dj','speed.1s.fr',
-  'moncourrier.fr.nf',
-  // Extended list
-  'mailnesia.com','spambox.us','trashmail.at','trashmail.io','trashmail.me',
-  'trashmail.net','trashmail.org','tempmail.ninja','tempmail.plus','temp-mail.org',
-  'temp-mail.io','temp-mail.ru','dropmail.me','emailondeck.com','spamgourmet.net',
-  'mailexpire.com','filzmail.com','tmail.com','mailzilla.com',
-  'mailnull.com','spamspot.com','spam.la','antispam.de',
-  'spamfree.eu','mailcatch.com','incognitomail.com','safetymail.info',
-  'spamtrail.com','bob.email','inoutmail.com','objectmail.com','proxymail.eu',
-  'rcpt.at','rklips.com','rmqkr.net','royal.net','s0ny.net','shortmail.net',
-  'sinnlos-mail.de','slaskpost.se','slipry.net','slopsbox.com','smellfear.com',
-  'snakemail.com','sneakemail.com','sofimail.com','sogetthis.com','spampoison.com',
-  'spamtrash.net','suioe.com','sweetxxx.de','tafmail.com','tagyourself.com',
-  'teewars.org','telecomix.pl','tempalias.com','tempe-mail.com','tempemail.biz',
-  'tempemail.com','tempinbox.co.uk','tempmailer.com','tempomail.fr',
-  'temporarioemail.com.br','temporaryemail.net','temporaryemail.us',
-  'temporaryinbox.com','thanksnospam.com','thanksnospam.info','thisisnotmyrealemail.com',
-  'tilien.com','tittbit.in','tmailinator.com','toiea.com','tradermail.info',
-  'trash2009.com','trash2010.com','trashdevil.de','trashemail.de',
-  'trashimail.com','trashmailer.com','trashymail.com','trbvm.com',
-  'turual.com','twinmail.de','tyldd.com','uggsrock.com','uroid.com',
-  'veryrealemail.com','vomoto.com','wazabi.club','wetrainbayarea.org',
-  'whyspam.me','willselfdestruct.com','wuzupmail.net','xagloo.com',
-  'xemaps.com','xents.com','xmaily.com','xoxy.net','xyzfree.net',
-  'yep.it','yogamaven.com','yopmail.pp.ua','ypmail.webarnak.fr.eu.org',
-  'yuurok.com','z1p.biz','za.com','zebins.com','zebins.eu','zehnminuten.de',
-  'zetmail.com','zippymail.info','zoaxe.com','zoemail.net','zoemail.org',
-  'zomg.info','zxcv.com','zxcvbnm.com','zzz.com',
+  'cool.fr.nf','courriel.fr.nf','junk1.me','get2mail.fr','trashdevil.com',
+  'jetable.fr.nf',
 ]);
 
-// ─── ROLE-BASED PREFIXES ──────────────────────────────────────────────────
-const ROLE_PREFIXES = [
+// ─── ROLE-BASED PREFIXES ───────────────────────────────────────────────────
+const ROLE_PREFIXES = new Set([
   'admin','administrator','support','noreply','no-reply','info','sales',
   'contact','help','abuse','postmaster','webmaster','marketing','billing',
-  'team','hello','hi','mail','office','enquiries','enquiry','careers',
-  'jobs','legal','privacy','security','newsletter','notifications','alerts',
-  'donotreply','do-not-reply','feedback','service','services','reply',
-  'subscribe','unsubscribe','bounce','list','lists','hostmaster','root',
-  'operator','operations','dev','developer','test','testing','demo',
-];
+  'team','mail','office','enquiries','enquiry','careers','jobs','legal',
+  'privacy','security','newsletter','notifications','alerts','donotreply',
+  'do-not-reply','feedback','service','services','reply','subscribe',
+  'unsubscribe','bounce','list','lists','hostmaster','root','operator',
+  'operations','dev','developer','test','testing','demo','press','media',
+  'hr','hiring','recruit','recruiting','accounts','invoice','invoices',
+  'orders','order','returns','refund','refunds','payments','payment',
+  'finance','accounting','it','helpdesk','servicedesk','sysadmin',
+]);
 
-// ─── TRUSTED PROVIDERS (MX check sufficient, SMTP blocked by them anyway) ─
+// ─── TRUSTED PROVIDERS ─────────────────────────────────────────────────────
+// These block SMTP probing anyway — MX verification is sufficient
 const TRUSTED_PROVIDERS = new Set([
   'gmail.com','googlemail.com','yahoo.com','yahoo.co.uk','yahoo.fr',
-  'yahoo.co.in','yahoo.com.au','yahoo.ca','outlook.com','hotmail.com',
-  'hotmail.co.uk','live.com','msn.com','icloud.com','me.com','mac.com',
-  'protonmail.com','proton.me','fastmail.com','fastmail.fm','zoho.com',
-  'aol.com','yandex.com','yandex.ru','mail.ru','gmx.com','gmx.net',
-  'web.de','t-online.de','orange.fr','laposte.net','free.fr','sfr.fr',
-  'bbox.fr','neuf.fr','wanadoo.fr','libero.it','virgilio.it','tin.it',
-  // Extended trusted providers
-  'pm.me','tutanota.com','tutanota.de','tutamail.com','tuta.io',
-  'hey.com','basecamp.com','apple.com',
-  'outlook.de','outlook.fr','outlook.es','outlook.it','outlook.jp',
-  'hotmail.de','hotmail.fr','hotmail.es','hotmail.it',
-  'live.co.uk','live.ca','live.com.au','live.fr','live.de',
-  'yahoo.de','yahoo.es','yahoo.it','yahoo.co.jp','yahoo.com.br',
+  'yahoo.co.in','yahoo.com.au','yahoo.ca','yahoo.de','yahoo.es',
+  'yahoo.it','yahoo.co.jp','yahoo.com.br','outlook.com','hotmail.com',
+  'hotmail.co.uk','hotmail.de','hotmail.fr','hotmail.es','hotmail.it',
+  'live.com','live.co.uk','live.ca','live.com.au','live.fr','live.de',
+  'msn.com','icloud.com','me.com','mac.com','apple.com',
+  'protonmail.com','proton.me','pm.me','tutanota.com','tutanota.de',
+  'tutamail.com','tuta.io','hey.com','fastmail.com','fastmail.fm',
+  'zoho.com','aol.com','yandex.com','yandex.ru','mail.ru',
+  'gmx.com','gmx.net','web.de','t-online.de','orange.fr','laposte.net',
+  'free.fr','sfr.fr','libero.it','virgilio.it','tin.it',
   'rediffmail.com','sina.com','qq.com','163.com','126.com',
   'naver.com','daum.net','hanmail.net',
 ]);
 
-// ─── SYNTAX CHECK (RFC 5321/5322) ─────────────────────────────────────────
+// ─── SPAM TRAP PATTERNS ────────────────────────────────────────────────────
+const SPAM_TRAP_PATTERNS = [
+  /^bounce[+\-_]/i,
+  /^trap[+\-_@]/i,
+  /^honeypot/i,
+  /^spamtrap/i,
+  /^spam[+\-_]/i,
+  /^do[-_]?not[-_]?reply/i,
+  /^blackhole/i,
+  /^devnull/i,
+  /^null@/i,
+];
+
+// ─── PERSONAL PROVIDER DOMAINS ─────────────────────────────────────────────
+const PERSONAL_PROVIDERS = new Set([
+  'gmail.com','googlemail.com','yahoo.com','yahoo.co.uk','yahoo.fr',
+  'yahoo.co.in','outlook.com','hotmail.com','hotmail.co.uk','live.com',
+  'icloud.com','me.com','mac.com','aol.com','protonmail.com','proton.me',
+  'pm.me','yandex.com','yandex.ru','mail.ru','gmx.com','gmx.net',
+]);
+
+// ─── RFC 5321/5322 SYNTAX CHECK ────────────────────────────────────────────
 function checkSyntax(email) {
   if (!email || typeof email !== 'string') return false;
   if (email.length > 254) return false;
@@ -146,22 +124,20 @@ function checkSyntax(email) {
   if (parts.length !== 2) return false;
   const [local, domain] = parts;
   if (!local || !domain) return false;
-  if (local.length > 64) return false;
-  if (domain.length > 253) return false;
-  // No leading/trailing dots
+  if (local.length > 64 || domain.length > 253) return false;
   if (local.startsWith('.') || local.endsWith('.')) return false;
   if (domain.startsWith('.') || domain.endsWith('.')) return false;
-  // No consecutive dots
   if (local.includes('..') || domain.includes('..')) return false;
+  if (!/\.[a-zA-Z]{2,63}$/.test(domain)) return false;
   const re = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,63}$/;
   return re.test(email);
 }
 
-// ─── MX LOOKUP (dual DNS resolver with fallback) ──────────────────────────
+// ─── DUAL-RESOLVER MX LOOKUP ───────────────────────────────────────────────
 async function checkMX(domain) {
   function tryResolve(server) {
     return new Promise((resolve, reject) => {
-      const resolver = new Resolver();
+      const resolver = new dnsNative.Resolver();
       resolver.setServers([server]);
       resolver.resolveMx(domain, (err, records) => {
         if (err) reject(err);
@@ -192,7 +168,7 @@ async function checkMX(domain) {
   }
 }
 
-// ─── SPF RECORD CHECK ─────────────────────────────────────────────────────
+// ─── SPF CHECK ─────────────────────────────────────────────────────────────
 async function checkSPF(domain) {
   try {
     const records = await Promise.race([
@@ -200,143 +176,194 @@ async function checkSPF(domain) {
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
     ]);
     const spf = records.flat().find(r => r.startsWith('v=spf1'));
-    return { found: !!spf, record: spf || null };
+    return { found: !!spf };
   } catch {
-    return { found: false, record: null };
+    return { found: false };
   }
 }
 
-// ─── DISPOSABLE CHECK ─────────────────────────────────────────────────────
+// ─── DISPOSABLE CHECK ──────────────────────────────────────────────────────
 function checkDisposable(domain) {
   const d = domain.toLowerCase();
   if (DISPOSABLE.has(d)) return true;
-  // Check subdomains e.g. mail.mailinator.com
   for (const bad of DISPOSABLE) {
     if (d.endsWith('.' + bad)) return true;
   }
   return false;
 }
 
-// ─── ROLE-BASED CHECK ────────────────────────────────────────────────────
+// ─── ROLE-BASED CHECK ──────────────────────────────────────────────────────
 function checkRoleBased(local) {
   const l = local.toLowerCase();
-  return ROLE_PREFIXES.some(
-    p => l === p || l.startsWith(p + '.') || l.startsWith(p + '_') || l.startsWith(p + '+')
-  );
+  return ROLE_PREFIXES.has(l) ||
+    [...ROLE_PREFIXES].some(p =>
+      l.startsWith(p + '.') || l.startsWith(p + '_') || l.startsWith(p + '+') || l.startsWith(p + '-')
+    );
 }
 
-// ─── GIBBERISH / ENTROPY CHECK ───────────────────────────────────────────
+// ─── SPAM TRAP CHECK ───────────────────────────────────────────────────────
+function checkSpamTrap(local, domain) {
+  const full = `${local}@${domain}`.toLowerCase();
+  return SPAM_TRAP_PATTERNS.some(pattern => pattern.test(full));
+}
+
+// ─── GIBBERISH CHECK (confidence penalty only — not a hard block) ──────────
 function checkGibberish(local) {
   const l = local.toLowerCase().replace(/[^a-z]/g, '');
-  if (l.length < 3) return false; // too short to judge
-
+  if (l.length < 3) return false;
   const vowels = (l.match(/[aeiou]/g) || []).length;
   const ratio = vowels / l.length;
-
-  // Very low vowel ratio in a long string = gibberish
   if (l.length > 8 && ratio < 0.10) return true;
-
-  // Long consecutive consonant run
   if (/[^aeiou]{7,}/.test(l)) return true;
-
-  // Pure random hex-like pattern (common in fake addresses)
   if (/^[a-f0-9]{8,}$/.test(local.toLowerCase())) return true;
-
-  // Repeating character
   if (/(.)\1{4,}/.test(l)) return true;
-
-  // All unique characters in a long string = random
   const unique = new Set(l).size;
   if (l.length > 12 && unique / l.length > 0.90) return true;
-
-  // Common random number suffix patterns: letters + 6+ digits
   if (/[a-z]{2,}\d{6,}/.test(local.toLowerCase())) return true;
-
   return false;
 }
 
-// ─── SMTP CHECK ───────────────────────────────────────────────────────────
-// Vercel blocks port 25. Options:
-//   a) Set SMTP_WORKER_URL to a Railway microservice URL for real RCPT probing
-//   b) Fall back to trusted-provider heuristic (what this does by default)
-async function checkSMTP(domain, mxHosts) {
+// ─── MAILBOX TYPE DETECTION ────────────────────────────────────────────────
+function detectMailboxType(domain, isRoleBased, isDisposable) {
+  if (isDisposable) return 'disposable';
+  if (isRoleBased) return 'role';
+  if (PERSONAL_PROVIDERS.has(domain.toLowerCase())) return 'personal';
+  return 'professional';
+}
+
+// ─── SMTP CHECK via Railway Worker ─────────────────────────────────────────
+async function checkSMTP(domain, mxHosts, email) {
   const d = domain.toLowerCase();
 
-  // Trusted providers: MX check is sufficient, they block RCPT probing anyway
+  // Trusted providers: MX check sufficient, they block port 25 anyway
   if (TRUSTED_PROVIDERS.has(d)) {
-    return { connected: true, trusted: true };
+    return {
+      connected: true,
+      accepted: true,
+      catchAll: false,
+      greylisted: false,
+      trusted: true,
+      method: 'trusted_provider',
+    };
   }
 
-  // Optional: call external SMTP worker (Railway / Fly.io)
+  // Use Railway SMTP worker if configured
   const workerUrl = process.env.SMTP_WORKER_URL;
-  if (workerUrl) {
+  if (workerUrl && mxHosts.length > 0) {
     try {
       const res = await fetch(`${workerUrl}/probe`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-secret': process.env.SMTP_WORKER_SECRET || '' },
-        body: JSON.stringify({ domain, mx: mxHosts[0] }),
-        signal: AbortSignal.timeout(8000),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-secret': process.env.SMTP_WORKER_SECRET || '',
+        },
+        body: JSON.stringify({ email, mx: mxHosts[0] }),
+        signal: AbortSignal.timeout(12000),
       });
       if (res.ok) {
         const data = await res.json();
-        return { connected: data.connected, catchAll: data.catchAll, trusted: false };
+        return {
+          connected: data.connected ?? false,
+          accepted: data.accepted ?? false,
+          catchAll: data.catchAll ?? false,
+          greylisted: data.greylisted ?? false,
+          trusted: false,
+          method: 'smtp_probe',
+          error: data.error,
+        };
       }
-    } catch { /* fall through to heuristic */ }
+    } catch (err) {
+      console.error('[smtp] worker error:', err.message);
+    }
   }
 
-  // Heuristic fallback: if MX exists and domain is not on blocklist → assume connectable
-  const SMTP_BLOCKLIST = ['spamhaus.org', 'barracuda.com', 'spamcop.net'];
-  if (mxHosts.some(mx => SMTP_BLOCKLIST.some(b => mx.includes(b)))) {
-    return { connected: false };
+  // Heuristic fallback (no worker configured)
+  const SINK_PATTERNS = ['spamhaus', 'barracuda', 'blackhole', 'null.'];
+  if (mxHosts.some(mx => SINK_PATTERNS.some(s => mx.includes(s)))) {
+    return { connected: false, accepted: false, method: 'heuristic' };
   }
 
-  return { connected: true, trusted: false, heuristic: true };
+  return {
+    connected: true,
+    accepted: true,   // ASSUMPTION — may be wrong without SMTP worker
+    catchAll: null,   // Unknown without SMTP probe
+    greylisted: false,
+    trusted: false,
+    method: 'heuristic',
+  };
 }
 
-// ─── CONFIDENCE SCORE ─────────────────────────────────────────────────────
+// ─── CONFIDENCE SCORE ──────────────────────────────────────────────────────
 function calcScore(c) {
-  if (!c.syntax) return 0;
-  if (!c.mx)     return 5;
+  if (!c.dns_syntax) return 0;
+  if (!c.mail_server) return 5;
   let s = 30; // base: syntax + MX
-  if (c.smtp)       s += 25;
-  if (c.mailbox)    s += 25;
-  if (c.trusted)    s += 5;
-  if (c.spf)        s += 5;
-  if (c.catchAll)   s -= 15;
-  if (c.disposable) s -= 30;
-  if (c.roleBased)  s -= 10;
-  if (c.gibberish)  s -= 12;
+
+  if (c.smtp_verified) s += 20;
+  if (c.mailbox_valid) s += 20;
+  if (c.spf)           s += 5;
+  if (c.trusted)       s += 5;
+
+  if (c.catch_all)  s -= 20;
+  if (c.temp_email) s -= 30;
+  if (c.role_based) s -= 8;
+  if (c.gibberish)  s -= 10;
+  if (c.greylisted) s -= 15;
+  if (c.spam_trap)  s -= 25;
+
   return Math.max(0, Math.min(100, Math.round(s)));
 }
 
-function deriveStatus(c, score) {
-  if (!c.syntax)     return 'invalid';
-  if (!c.mx)         return 'invalid';
-  if (c.disposable)  return 'risky';
-  if (!c.smtp)       return 'unknown';
-  if (c.catchAll)    return 'risky';
-  if (c.roleBased)   return 'risky';
-  if (score >= 75)   return 'valid';
-  if (score >= 45)   return 'risky';
-  return 'invalid';
+// ─── STATUS DERIVATION (matches Skrapp's status labels) ───────────────────
+function deriveStatus(c, smtpMethod) {
+  if (!c.dns_syntax)  return 'invalid';
+  if (!c.mail_server) return 'invalid';
+  if (c.temp_email)   return 'invalid';
+  if (c.spam_trap)    return 'invalid';
+
+  // Without SMTP worker, we can't confirm catch-all or invalid mailboxes
+  if (smtpMethod === 'heuristic') {
+    return 'unknown';
+  }
+
+  if (!c.smtp_verified) return 'unknown';
+  if (c.greylisted)     return 'unknown';
+  if (c.catch_all)      return 'catch-all';
+  if (!c.mailbox_valid) return 'invalid';
+
+  return 'valid';
 }
 
-function deriveReason(c) {
-  if (!c.syntax)    return 'Invalid syntax — fails RFC 5321/5322';
-  if (!c.mx)        return 'No MX records found for this domain';
-  if (c.disposable) return 'Disposable / burner email provider detected';
-  if (!c.smtp)      return 'SMTP server unreachable or timed out';
-  const flags = [];
-  if (c.catchAll)  flags.push('Catch-all domain — mailbox existence unverifiable');
-  if (c.roleBased) flags.push('Role-based address — routes to a team, not a person');
-  if (c.gibberish) flags.push('Suspicious local-part entropy pattern');
-  if (flags.length) return flags.join(' · ');
-  return c.trusted
-    ? 'Trusted provider — MX verified, SMTP connection confirmed'
-    : 'MX + SMTP verified — mailbox appears deliverable';
+// ─── HUMAN-READABLE REASON (matches Skrapp's message style) ───────────────
+function deriveReason(status, c) {
+  switch (status) {
+    case 'valid':
+      return 'Email is valid and successfully reachable.';
+    case 'catch-all':
+      return "Email is reachable, but it's a catch-all address, and the recipient's existence is uncertain.";
+    case 'invalid':
+      if (!c.dns_syntax)  return 'Email format is invalid (RFC 5321/5322).';
+      if (!c.mail_server) return 'No mail server found for this domain.';
+      if (c.temp_email)   return 'Disposable or temporary email provider detected.';
+      if (c.spam_trap)    return 'Address matches spam trap signature.';
+      return 'Email is invalid and cannot be reached.';
+    case 'unknown':
+      if (c.greylisted) return 'Mail server returned a temporary rejection (greylisting). Retry recommended.';
+      return 'Email deliverability could not be determined.';
+    default:
+      return 'Verification incomplete.';
+  }
 }
 
-// ─── MAIN VERIFY FUNCTION ─────────────────────────────────────────────────
+// ─── MAILBOX STATUS ────────────────────────────────────────────────────────
+function deriveMailboxStatus(status) {
+  if (status === 'valid')     return 'valid';
+  if (status === 'catch-all') return 'valid';
+  if (status === 'invalid')   return 'invalid';
+  return 'unknown';
+}
+
+// ─── MAIN VERIFY FUNCTION ──────────────────────────────────────────────────
 async function verifyEmail(email) {
   const start = Date.now();
   email = (email || '').trim().toLowerCase();
@@ -345,75 +372,100 @@ async function verifyEmail(email) {
     email,
     status: 'unknown',
     confidence: 0,
+    // Skrapp-compatible fields
+    syntax_valid: 'invalid',
+    mailbox_status: 'unknown',
+    mailbox_type: 'professional',
+    mx_host: null,
+    // Check breakdown
     checks: {
-      syntax: false, mx: false, smtp: false, mailbox: false,
-      catchAll: false, disposable: false, roleBased: false,
-      gibberish: false, trusted: false, spf: false,
+      dns_syntax:    false,
+      mail_server:   false,
+      smtp_verified: false,
+      mailbox_valid: false,
+      catch_all:     false,
+      temp_email:    false,
+      greylisted:    false,
+      spam_trap:     false,
+      role_based:    false,
+      gibberish:     false,
+      spf:           false,
+      trusted:       false,
     },
     reason: '',
     mx_records: [],
+    verification_method: 'none',
     response_time_ms: 0,
   };
 
-  // L1: Syntax
-  result.checks.syntax = checkSyntax(email);
-  if (!result.checks.syntax) {
+  // L1: DNS Syntax & RFC Compliance
+  result.checks.dns_syntax = checkSyntax(email);
+  if (!result.checks.dns_syntax) {
     result.status = 'invalid';
-    result.reason = deriveReason(result.checks);
+    result.syntax_valid = 'invalid';
+    result.mailbox_status = 'invalid';
+    result.reason = deriveReason('invalid', result.checks);
     result.response_time_ms = Date.now() - start;
-    result.verification_method = 'dns_only';
     return result;
   }
 
+  result.syntax_valid = 'valid';
   const [local, domain] = email.split('@');
 
-  // L3 + L4 + L7: instant checks (no network)
-  result.checks.disposable = checkDisposable(domain);
-  result.checks.roleBased  = checkRoleBased(local);
+  // Instant checks (no network)
+  result.checks.temp_email = checkDisposable(domain);
+  result.checks.role_based = checkRoleBased(local);
   result.checks.gibberish  = checkGibberish(local);
+  result.checks.spam_trap  = checkSpamTrap(local, domain);
+  result.mailbox_type      = detectMailboxType(domain, result.checks.role_based, result.checks.temp_email);
 
-  // L2: MX lookup
-  const mxResult = await checkMX(domain);
-  result.checks.mx  = mxResult.found;
-  result.mx_records = mxResult.mx;
-
-  if (!result.checks.mx) {
+  // Early exit for disposable (still do MX to fill mx_host)
+  if (result.checks.temp_email) {
+    const mxResult = await checkMX(domain);
+    result.checks.mail_server = mxResult.found;
+    result.mx_records = mxResult.mx;
+    result.mx_host = mxResult.mx[0] || null;
     result.status = 'invalid';
-    result.reason = deriveReason(result.checks);
+    result.mailbox_status = 'invalid';
+    result.reason = deriveReason('invalid', result.checks);
     result.response_time_ms = Date.now() - start;
-    result.verification_method = 'dns_only';
     return result;
   }
 
-  // L5: SMTP + SPF in parallel
-  const [smtpResult, spfResult] = await Promise.all([
-    checkSMTP(domain, mxResult.mx),
+  // L2: Mail Server Existence (dual DNS) + SPF in parallel
+  const [mxResult, spfResult] = await Promise.all([
+    checkMX(domain),
     checkSPF(domain),
   ]);
 
-  result.checks.smtp    = smtpResult.connected;
-  result.checks.trusted = !!smtpResult.trusted;
-  result.checks.spf     = spfResult.found;
-  if (smtpResult.catchAll !== undefined) {
-    result.checks.catchAll = smtpResult.catchAll;
+  result.checks.mail_server = mxResult.found;
+  result.checks.spf = spfResult.found;
+  result.mx_records = mxResult.mx;
+  result.mx_host = mxResult.mx[0] || null;
+
+  if (!result.checks.mail_server) {
+    result.status = 'invalid';
+    result.mailbox_status = 'invalid';
+    result.reason = deriveReason('invalid', result.checks);
+    result.response_time_ms = Date.now() - start;
+    return result;
   }
 
-  // Mailbox: if SMTP ok and not disposable → consider deliverable
-  result.checks.mailbox = result.checks.smtp && !result.checks.disposable;
+  // L5-L8: SMTP Verification + Catch-all + Greylisting
+  const smtpResult = await checkSMTP(domain, mxResult.mx, email);
 
-  result.confidence = calcScore(result.checks);
-  result.status     = deriveStatus(result.checks, result.confidence);
-  result.reason     = deriveReason(result.checks);
+  result.checks.smtp_verified = smtpResult.connected && smtpResult.accepted;
+  result.checks.mailbox_valid = smtpResult.connected && smtpResult.accepted && !smtpResult.catchAll;
+  result.checks.catch_all     = smtpResult.catchAll === true;
+  result.checks.greylisted    = smtpResult.greylisted === true;
+  result.checks.trusted       = smtpResult.trusted === true;
+  result.verification_method  = smtpResult.method;
+
+  result.confidence     = calcScore(result.checks);
+  result.status         = deriveStatus(result.checks, smtpResult.method);
+  result.mailbox_status = deriveMailboxStatus(result.status);
+  result.reason         = deriveReason(result.status, result.checks);
   result.response_time_ms = Date.now() - start;
-
-  // Verification method transparency
-  result.verification_method = result.checks.trusted
-    ? 'trusted_provider'
-    : smtpResult?.heuristic
-      ? 'heuristic'
-      : smtpResult?.connected && !smtpResult?.heuristic
-        ? 'smtp_probe'
-        : 'dns_only';
 
   return result;
 }

@@ -84,7 +84,7 @@ async function handler(req, res) {
     const stats = results.reduce((acc, r) => {
       acc[r.status] = (acc[r.status] || 0) + 1;
       return acc;
-    }, { valid: 0, invalid: 0, risky: 0, unknown: 0 });
+    }, { valid: 0, invalid: 0, 'catch-all': 0, unknown: 0 });
 
     // Optional filtering
     let output = results;

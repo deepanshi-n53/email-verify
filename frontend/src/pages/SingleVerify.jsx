@@ -7,13 +7,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Simulate step-by-step UI progress while real API call runs in parallel
 const STEP_SEQUENCE = [
-  { id: 'syntax',     delay: 200 },
-  { id: 'mx',         delay: 500 },
-  { id: 'disposable', delay: 300 },
-  { id: 'role',       delay: 200 },
-  { id: 'smtp',       delay: 600 },
-  { id: 'catchall',   delay: 400 },
-  { id: 'gibberish',  delay: 250 },
+  { id: 'dns_syntax',    delay: 200 },
+  { id: 'mail_server',   delay: 500 },
+  { id: 'temp_email',    delay: 300 },
+  { id: 'role_based',    delay: 200 },
+  { id: 'smtp_verified', delay: 600 },
+  { id: 'catch_all',     delay: 400 },
+  { id: 'gibberish',     delay: 250 },
 ];
 
 export default function SingleVerify() {
@@ -47,14 +47,15 @@ export default function SingleVerify() {
       const data = await apiCall;
 
       // Update steps to match actual result
+      const c = data.checks;
       setStepStates({
-        syntax:    data.checks.syntax     ? 'done' : 'fail',
-        mx:        data.checks.mx         ? 'done' : 'fail',
-        disposable: !data.checks.disposable ? 'done' : 'fail',
-        role:      !data.checks.roleBased  ? 'done' : 'fail',
-        smtp:      data.checks.smtp       ? 'done' : 'fail',
-        catchall:  !data.checks.catchAll  ? 'done' : 'fail',
-        gibberish: !data.checks.gibberish ? 'done' : 'fail',
+        dns_syntax:    (c.dns_syntax    ?? c.syntax)     ? 'done' : 'fail',
+        mail_server:   (c.mail_server   ?? c.mx)         ? 'done' : 'fail',
+        temp_email:   !(c.temp_email    ?? c.disposable) ? 'done' : 'fail',
+        role_based:   !(c.role_based    ?? c.roleBased)  ? 'done' : 'fail',
+        smtp_verified: (c.smtp_verified ?? c.smtp)       ? 'done' : 'fail',
+        catch_all:    !(c.catch_all     ?? c.catchAll)   ? 'done' : 'fail',
+        gibberish:    !c.gibberish                       ? 'done' : 'fail',
       });
 
       setResult(data);
@@ -85,7 +86,7 @@ export default function SingleVerify() {
           marginBottom: 18,
         }}>
           <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#6c63ff', display: 'inline-block', animation: 'pulse 2s infinite' }} />
-          7-layer verification engine
+          9-layer verification engine
         </div>
         <h1 style={{
           fontSize: 38, fontWeight: 600, letterSpacing: '-1px', lineHeight: 1.15, marginBottom: 12,
@@ -97,11 +98,11 @@ export default function SingleVerify() {
           }}>surgical precision</span>
         </h1>
         <p style={{ color: '#8888a8', fontSize: 15, fontWeight: 300, maxWidth: 460, margin: '0 auto', lineHeight: 1.6 }}>
-          SMTP handshake · catch-all detection · disposable filtering · confidence scoring.
+          SMTP verified · catch-all detection · disposable filtering · confidence scoring.
           Zero false positives.
         </p>
         <p style={{ color: '#6888a8', fontSize: 13, marginTop: 8 }}>
-          100% free · No account required · No limits on single checks
+          100% free · No account required · SMTP verified · Catch-all detection
         </p>
       </div>
 
@@ -166,7 +167,7 @@ export default function SingleVerify() {
       <div style={{
         marginTop: 20, display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center',
       }}>
-        {['john@gmail.com', 'noreply@company.com', 'test@mailinator.com', 'xkqz88@hotmail.com'].map(ex => (
+        {['john@gmail.com', 'noreply@company.com', 'test@mailinator.com', 'bounce@mailinator.com'].map(ex => (
           <button
             key={ex}
             onClick={() => { setEmail(ex); setTimeout(runVerify, 50); }}

@@ -27,7 +27,7 @@ export default function BulkVerify() {
     setLoading(true);
     setResults(null);
     setError('');
-    setProgress({ done: 0, total: emails.length, stats: { valid:0,invalid:0,risky:0,unknown:0 } });
+    setProgress({ done: 0, total: emails.length, stats: { valid:0,invalid:0,'catch-all':0,unknown:0 } });
 
     // Vercel function handles the async processing;
     // we poll every 300ms to update the progress bar (simulated client-side).
@@ -41,7 +41,7 @@ export default function BulkVerify() {
         const data = await verifyBulk(chunk);
         allResults = allResults.concat(data.results || []);
         const stats = allResults.reduce((acc, r) => { acc[r.status]=(acc[r.status]||0)+1; return acc; },
-          { valid:0, invalid:0, risky:0, unknown:0 });
+          { valid:0, invalid:0, 'catch-all':0, unknown:0 });
         setProgress({ done: allResults.length, total: emails.length, stats });
       } catch (err) {
         setError(err.data?.message || err.message || 'Verification failed.');
@@ -168,10 +168,10 @@ export default function BulkVerify() {
             </div>
             {progress?.stats && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
-                <MiniStat num={progress.stats.valid}   label="Valid"    color="#22c55e" />
-                <MiniStat num={progress.stats.invalid} label="Invalid"  color="#ef4444" />
-                <MiniStat num={progress.stats.risky}   label="Risky"    color="#f59e0b" />
-                <MiniStat num={progress.stats.unknown} label="Unknown"  color="#8888a8" />
+                <MiniStat num={progress.stats.valid}          label="Valid"      color="#22c55e" />
+                <MiniStat num={progress.stats.invalid}        label="Invalid"    color="#ef4444" />
+                <MiniStat num={progress.stats['catch-all']}   label="Catch-All"  color="#f59e0b" />
+                <MiniStat num={progress.stats.unknown}        label="Unknown"    color="#8888a8" />
               </div>
             )}
           </div>
@@ -180,13 +180,25 @@ export default function BulkVerify() {
         {/* Results */}
         {results && (
           <div className="fade-up">
+            {/* Heuristic accuracy warning */}
+            {results.some(r => r.verification_method === 'heuristic') && (
+              <div style={{
+                background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+                borderRadius: 10, padding: '10px 14px', color: '#f59e0b', fontSize: 12,
+                marginBottom: 14, lineHeight: 1.6,
+              }}>
+                ⚡ Results based on DNS/MX heuristic. For full SMTP accuracy (catch-all + invalid detection),
+                set <code style={{ background: 'rgba(245,158,11,0.1)', padding: '1px 5px', borderRadius: 3 }}>SMTP_WORKER_URL</code> in your Vercel environment variables.
+              </div>
+            )}
+
             {/* Summary stats */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 16 }}>
               {[
-                { k: 'valid',   c: '#22c55e', l: 'Valid' },
-                { k: 'invalid', c: '#ef4444', l: 'Invalid' },
-                { k: 'risky',   c: '#f59e0b', l: 'Risky' },
-                { k: 'unknown', c: '#8888a8', l: 'Unknown' },
+                { k: 'valid',     c: '#22c55e', l: 'Valid' },
+                { k: 'invalid',   c: '#ef4444', l: 'Invalid' },
+                { k: 'catch-all', c: '#f59e0b', l: 'Catch-All' },
+                { k: 'unknown',   c: '#8888a8', l: 'Unknown' },
               ].map(({ k, c, l }) => (
                 <MiniStat key={k} num={results.filter(r=>r.status===k).length} label={l} color={c} />
               ))}

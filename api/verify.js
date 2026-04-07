@@ -46,9 +46,21 @@ async function handler(req, res) {
 
   try {
     const result = await verifyEmail(email);
+
+    // Add Skrapp-compatible aliases (additive — does not remove existing fields)
+    const response = {
+      ...result,
+      email_status: result.status,
+      email_format: result.syntax_valid,
+      email_mailbox_status: result.mailbox_status,
+      email_mailbox_type: result.mailbox_type,
+      email_exchange: result.mx_host,
+      email_verification_message: result.reason,
+    };
+
     // Cache successful results for 1 hour in Vercel edge cache
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=86400');
-    return res.status(200).json(result);
+    return res.status(200).json(response);
   } catch (err) {
     console.error('[verify] error:', err.message);
     return res.status(500).json({

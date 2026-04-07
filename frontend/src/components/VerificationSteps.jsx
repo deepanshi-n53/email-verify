@@ -1,13 +1,13 @@
 import React from 'react';
 
 const STEPS = [
-  { id: 'syntax',     label: 'Syntax validation (RFC 5321/5322)' },
-  { id: 'mx',         label: 'Domain MX record lookup' },
-  { id: 'disposable', label: 'Disposable domain check' },
-  { id: 'role',       label: 'Role-based address detection' },
-  { id: 'smtp',       label: 'SMTP connection handshake' },
-  { id: 'catchall',   label: 'Catch-all domain probe' },
-  { id: 'gibberish',  label: 'Local-part entropy analysis' },
+  { id: 'dns_syntax',    label: 'Syntax validation (RFC 5321/5322)' },
+  { id: 'mail_server',   label: 'Domain mail server lookup' },
+  { id: 'temp_email',    label: 'Temporary email detection' },
+  { id: 'role_based',    label: 'Role-based address detection' },
+  { id: 'smtp_verified', label: 'SMTP connection & mailbox probe' },
+  { id: 'catch_all',     label: 'Catch-all domain detection' },
+  { id: 'gibberish',     label: 'Local-part entropy analysis' },
 ];
 
 function StepIcon({ state }) {
@@ -31,7 +31,7 @@ function StepIcon({ state }) {
 }
 
 export default function VerificationSteps({ stepStates }) {
-  // stepStates: { syntax: 'done'|'running'|'fail'|'pending', ... }
+  // stepStates: { dns_syntax: 'done'|'running'|'fail'|'pending', ... }
   const colorMap = { running: '#8b84ff', done: '#22c55e', fail: '#ef4444', pending: '#8888a8' };
 
   return (
